@@ -28,8 +28,8 @@ import           Apecs.Core
 
 -- | A map based on @Data.Intmap.Strict@. O(log(n)) for most operations.
 newtype Map c = Map (IORef (M.IntMap c))
+type instance Elem (Map c) = c
 instance Store (Map c) where
-  type Elem (Map c) = c
   initStore = Map <$> newIORef mempty
   explGet     (Map ref) ety   = fromJust . M.lookup ety <$> readIORef ref
   explSet     (Map ref) ety x = modifyIORef' ref $ M.insert ety x
@@ -46,8 +46,8 @@ instance Store (Map c) where
 --   Writing to it overwrites both the previous component and its owner.
 --   Its main purpose is to be a @Map@ optimized for when only ever one component inhabits it.
 data Unique c = Unique (IORef Int) (IORef c)
+type instance Elem (Unique c) = c
 instance Store (Unique c) where
-  type Elem (Unique c) = c
   initStore = Unique <$> newIORef (-1) <*> newIORef (error "Uninitialized Unique value")
   explGet     (Unique _ cref) _ = readIORef cref
   explSet     (Unique eref cref) ety x = writeIORef eref ety >> writeIORef cref x
@@ -67,8 +67,8 @@ instance Store (Unique c) where
 --   The store will return true for every existence check, but only ever gives (-1) as its inhabitant.
 --   The entity argument is ignored when setting/getting a global.
 newtype Global c = Global (IORef c)
+type instance Elem (Global c) = c
 instance Monoid c => Store (Global c) where
-  type Elem   (Global c) = c
   initStore = Global <$> newIORef mempty
   explGet (Global ref) _   = readIORef ref
   explSet (Global ref) _ c = writeIORef ref c
@@ -87,12 +87,12 @@ data Cache (n :: Nat) s =
   Cache Int (UM.IOVector Int) (VM.IOVector (Elem s)) s
 
 -- | An empty type class indicating that the store behaves like a regular map, and can therefore safely be cached.
-class Store s => Cachable s
+class Cachable s
 instance Cachable (Map s)
 instance (KnownNat n, Cachable s) => Cachable (Cache n s)
 
-instance (KnownNat n, Cachable s) => Store (Cache n s) where
-  type Elem (Cache n s) = Elem s
+type instance Elem (Cache n s) = Elem s
+instance (KnownNat n, Cachable s) => Store m (Cache n s) where
   initStore = do
     let n = fromIntegral$ natVal (Proxy @n)
     tags <- UM.replicate n (-1)
