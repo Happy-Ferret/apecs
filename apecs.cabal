@@ -36,7 +36,7 @@ library
     containers,
     mtl,
     template-haskell,
-    async,
+    async, stm, primitive,
     vector
   ghc-options:
     -Wall

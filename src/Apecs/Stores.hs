@@ -1,3 +1,4 @@
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE DataKinds             #-}
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE FlexibleInstances     #-}
@@ -9,14 +10,13 @@
 {-# LANGUAGE TypeFamilies          #-}
 
 module Apecs.Stores
-  ( Map, Cache, Unique,
-    Global,
-    Cachable,
+  ( Map
   ) where
 
 import           Control.Monad.Reader
+import           Control.Monad.Primitive
+import           Control.Monad.ST
 import qualified Data.IntMap.Strict          as M
-import           Data.IORef
 import           Data.Maybe                  (fromJust)
 import           Data.Proxy
 import qualified Data.Vector.Mutable         as VM
@@ -27,27 +27,32 @@ import           GHC.TypeLits
 import           Apecs.Core
 
 -- | A map based on @Data.Intmap.Strict@. O(log(n)) for most operations.
-newtype Map c = Map (IORef (M.IntMap c))
-type instance Elem (Map c) = c
-instance Store (Map c) where
-  initStore = Map <$> newIORef mempty
-  explGet     (Map ref) ety   = fromJust . M.lookup ety <$> readIORef ref
-  explSet     (Map ref) ety x = modifyIORef' ref $ M.insert ety x
-  explExists  (Map ref) ety   = M.member ety <$> readIORef ref
-  explDestroy (Map ref) ety   = modifyIORef' ref (M.delete ety)
-  explMembers (Map ref)       = U.fromList . M.keys <$> readIORef ref
+newtype Map m c = Map (VM.MVector (PrimState m) (M.IntMap c))
+type instance Elem (Map s c) = c
+
+type IOMap c = Map IO c
+type STMap s c = Map (ST s) c
+
+instance (PrimMonad m) => Store m (Map m c) where
+  initStore = Map <$> VM.replicate 1 (mempty :: M.IntMap c)
+  explGet     (Map ref) ety   = fromJust . M.lookup ety <$> VM.read ref 0
+  explSet     (Map ref) ety x = VM.modify ref (M.insert ety x) 0
+  explExists  (Map ref) ety   = M.member ety <$> VM.read ref 0
+  explDestroy (Map ref) ety   = VM.modify ref (M.delete ety) 0
+  explMembers (Map ref)       = U.fromList . M.keys <$> VM.read ref 0
   {-# INLINE explGet #-}
   {-# INLINE explSet #-}
   {-# INLINE explDestroy #-}
   {-# INLINE explMembers #-}
   {-# INLINE explExists #-}
 
+{--
 -- | A Unique contains zero or one component.
 --   Writing to it overwrites both the previous component and its owner.
 --   Its main purpose is to be a @Map@ optimized for when only ever one component inhabits it.
 data Unique c = Unique (IORef Int) (IORef c)
 type instance Elem (Unique c) = c
-instance Store (Unique c) where
+instance Store IO (Unique c) where
   initStore = Unique <$> newIORef (-1) <*> newIORef (error "Uninitialized Unique value")
   explGet     (Unique _ cref) _ = readIORef cref
   explSet     (Unique eref cref) ety x = writeIORef eref ety >> writeIORef cref x
@@ -68,7 +73,7 @@ instance Store (Unique c) where
 --   The entity argument is ignored when setting/getting a global.
 newtype Global c = Global (IORef c)
 type instance Elem (Global c) = c
-instance Monoid c => Store (Global c) where
+instance Monoid c => Store IO (Global c) where
   initStore = Global <$> newIORef mempty
   explGet (Global ref) _   = readIORef ref
   explSet (Global ref) _ c = writeIORef ref c
@@ -92,7 +97,7 @@ instance Cachable (Map s)
 instance (KnownNat n, Cachable s) => Cachable (Cache n s)
 
 type instance Elem (Cache n s) = Elem s
-instance (KnownNat n, Cachable s) => Store m (Cache n s) where
+instance (KnownNat n, Cachable s) => Store IO (Cache n s) where
   initStore = do
     let n = fromIntegral$ natVal (Proxy @n)
     tags <- UM.replicate n (-1)
@@ -135,3 +140,4 @@ instance (KnownNat n, Cachable s) => Store m (Cache n s) where
       explSet s tag cached
     UM.unsafeWrite tags  index ety
     VM.unsafeWrite cache index x
+--}

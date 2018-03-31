@@ -1,0 +1,109 @@
+#+TITLE: ECS Verification
+
+* Introduction [0/2]
+** TODO What is ECS [0/3]
+*** TODO C
+    Piece of data
+*** TODO E
+Integer
+*** TODO S
+No consensus.
+Most imperative implementations use some form of a polymorphic system added to a global dispatcher.
+No mention of monads?
+** TODO Store abstraction [0/2]
+*** TODO Composition
+
+*** TODO Extension
+apecs-physics
+reactivity
+hashing
+arbitrary side-effects
+* Related work
+[[http://gameprogrammingpatterns.com/component.html][Component pattern]]
+[[https://www.gamasutra.com/blogs/TobiasStein/20171122/310172/The_EntityComponentSystem__An_awesome_gamedesign_pattern_in_C_Part_1.php][cpp ECS, 2017]]
+** Wikipedia links
+*** Thief
+[[https://www.gamasutra.com/view/feature/3355/postmortem_thief_the_dark_project.php][Thief postmortem]]
+[[http://chrishecker.com/images/6/6f/ObjSys.ppt][Object Systems ppt]]
+
+*** Dungeon Siege
+[[http://gamedevs.org/uploads/data-driven-game-object-system.pdf][Original GDC talk]]
+Frames problem as a database
+169 components, 21 of which are C-backed
+DSL for templating
+Primarily data focused, no mention of system
+
+*** Operation Flashpoint
+[[http://t-machine.org/index.php/2007/09/03/entity-systems-are-the-future-of-mmog-development-part-1/][Entity Systems are the future of MMOG development]]
+[[http://entity-systems.wikidot.com/][Entity Systems wiki]]
+#+BEGIN_QUOTE
+Each System runs continuously (as though each System had it’s own private thread) and performs global actions on every Entity that possesses a Component of the same aspect as that System.
+#+END_QUOTE
+
+*** Apple gameplaykit
+Geen duidelijke verwijzingen
+** OS projects
+*** Entitas
+- object pooling
+- Unity
+*** specs
+- Rust
+- Dispatcher
+- verbose
+*** ecstasy
+- Haskell
+- inspired by apecs
+- generics over templateHaskell
+*** Ash
+[[http://www.richardlord.net/ash/index.html][Ash]]
+- Actionscript
+- Dispatcher
+*** artemis
+- battle tested
+- Java
+- Systems extend one of many templates and are manually added to a dispatcher
+* Simple store
+** Class
+*** Pure
+#+BEGIN_SRC coq
+class Store s where
+  type Elem s
+  sNew :: s
+  sSet :: s -> Int -> Elem s -> s
+  sGet :: s -> Int -> Elem s
+  sDestroy :: s -> Int -> s
+  sExists  :: s -> Int -> Bool
+  sMembers :: s -> [Int]
+#+END_SRC
+
+*** Effectful
+#+BEGIN_SRC haskell
+class Store s where
+  type Elem s
+  explNew :: IO s
+  explSet :: s -> Int -> Elem s -> IO ()
+  explGet :: s -> Int -> IO (Elem s)
+  explDestroy :: s -> Int -> IO ()
+  explExists  :: s -> Int -> IO Bool
+  explMembers :: s -> IO (Vector Int)
+#+END_SRC
+   
+** Laws
+1. ~exists s n = true~ -> ~get s n~ is safe
+2. For every entity in ~sMembers s~, ~sExists s n = true~
+** Stores
+  
+| store                 | Elem                       | set                           | get                   | destroy                      | exists                        | members                         | notes                                   |
+|-----------------------+----------------------------+-------------------------------+-----------------------+------------------------------+-------------------------------+---------------------------------+-----------------------------------------|
+| Map c                 | c                          | normal map behaviour          | unsafe lookup         | remove from map              | is key in map                 | list of keys                    |                                         |
+| Unique c              | c                          | Maybe (k,v)                   | unsafe if n/=k        | set to Nothing if n/=k       | n==k                          | [k]                             |                                         |
+| Global s              | c                          | ignore n                      | return v              | noop                         | return true                   | [-1]                            | -1 allows iteration over single member  |
+|-----------------------+----------------------------+-------------------------------+-----------------------+------------------------------+-------------------------------+---------------------------------+-----------------------------------------|
+| (sa, sb)              | (Elem sa, Elem sb)         | set sa n sx >> set sb n sy    | (get sa n, get sb n)  | destroy sa n >> destroy sb n | exists sa n `and` exists sb n | filter (exists sb) (members sa) | conjunction                             |
+| NotStore s            | Not :: Not (Elem s)        | destroy                       | return Not            | noop                         | not <$> exists                | []                              | disjunction                             |
+| MaybeStore s          | Maybe (Elem s)             | destroys Nothing, sets Just   | Nothing for failure   | noop                         | return true                   | []                              |                                         |
+| Either sa sb          | Either (Elem sa) (Elem sb) | Left to sa, Right to sb       | sa if exists, else sb | noop                         | exists sa n `or` exists sb n  | union sa sb                     |                                         |
+| Cachable s => Cache s | Elem s                     | writes to cache, writethrough | reads from cache or s | destroy                      | exists in cache or s          | members cache ++ members sa     | only for map-likes, preserves behaviour |
+
+* Component resolution
+** Systems
