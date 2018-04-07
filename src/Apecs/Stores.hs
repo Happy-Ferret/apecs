@@ -10,7 +10,7 @@
 {-# LANGUAGE TypeFamilies          #-}
 
 module Apecs.Stores
-  ( Map
+  ( Map, Global
   ) where
 
 import           Control.Monad.Reader
@@ -46,46 +46,26 @@ instance (PrimMonad m) => Store m (Map m c) where
   {-# INLINE explMembers #-}
   {-# INLINE explExists #-}
 
-{--
--- | A Unique contains zero or one component.
---   Writing to it overwrites both the previous component and its owner.
---   Its main purpose is to be a @Map@ optimized for when only ever one component inhabits it.
-data Unique c = Unique (IORef Int) (IORef c)
-type instance Elem (Unique c) = c
-instance Store IO (Unique c) where
-  initStore = Unique <$> newIORef (-1) <*> newIORef (error "Uninitialized Unique value")
-  explGet     (Unique _ cref) _ = readIORef cref
-  explSet     (Unique eref cref) ety x = writeIORef eref ety >> writeIORef cref x
-  explDestroy (Unique eref _) ety = do e <- readIORef eref; when (e==ety) (writeIORef eref (-1))
-  explMembers (Unique eref _) = f <$> readIORef eref
-    where f (-1) = mempty
-          f x    = U.singleton x
-  explExists  (Unique eref _) ety = (==ety) <$> readIORef eref
-  {-# INLINE explDestroy #-}
-  {-# INLINE explMembers #-}
-  {-# INLINE explExists #-}
-  {-# INLINE explSet #-}
-  {-# INLINE explGet #-}
-
 -- | A Global contains exactly one component.
 --   Initialized with 'mempty'
 --   The store will return true for every existence check, but only ever gives (-1) as its inhabitant.
 --   The entity argument is ignored when setting/getting a global.
-newtype Global c = Global (IORef c)
-type instance Elem (Global c) = c
-instance Monoid c => Store IO (Global c) where
-  initStore = Global <$> newIORef mempty
-  explGet (Global ref) _   = readIORef ref
-  explSet (Global ref) _ c = writeIORef ref c
-  explExists  _ _ = return True
-  explDestroy s _ = explSet s 0 mempty
-  explMembers _ = return $ U.singleton (-1)
+newtype Global m c = Global (VM.MVector (PrimState m) c)
+type instance Elem (Global m c) = c
+instance (PrimMonad m, Monoid c) => Store m (Global m c) where
+  initStore = Global <$> VM.replicate 1 mempty
+  explGet     (Global ref) ety   = VM.read ref 0
+  explSet     (Global ref) ety x = VM.write ref 0 x
+  explExists  _ _                = return True
+  explDestroy _ _                = return ()
+  explMembers (Global ref)       = return $ U.singleton 1
   {-# INLINE explDestroy #-}
   {-# INLINE explMembers #-}
   {-# INLINE explExists #-}
   {-# INLINE explSet #-}
   {-# INLINE explGet #-}
 
+{--
 -- | A cache around another store.
 --   Note that iterating over a cache is linear in cache size, so sparsely populated caches might actually decrease performance.
 data Cache (n :: Nat) s =

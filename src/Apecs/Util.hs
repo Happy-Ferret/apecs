@@ -24,6 +24,7 @@ module Apecs.Util (
 
 import           Control.Applicative  (liftA2)
 import           Control.Monad.Reader (liftIO)
+import           Control.Monad.IO.Class
 import           Data.Monoid
 import           System.CPUTime
 import           System.Mem           (performMajorGC)
@@ -45,11 +46,11 @@ proxy = error "Proxy value"
 newtype EntityCounter = EntityCounter {getCounter :: Sum Int} deriving (Monoid, Eq, Show)
 
 instance Component EntityCounter where
-  type Storage EntityCounter = Global EntityCounter
+  type Storage EntityCounter = Global IO EntityCounter
 
 -- | Bumps the EntityCounter and yields its value
 {-# INLINE nextEntity #-}
-nextEntity :: Has w EntityCounter => System w Entity
+nextEntity :: Has w IO EntityCounter => SystemT w IO Entity
 nextEntity = do EntityCounter n <- get global
                 set global (EntityCounter $ n+1)
                 return (Entity . getSum $ n)
@@ -57,14 +58,14 @@ nextEntity = do EntityCounter n <- get global
 -- | Writes the given components to a new entity, and yields that entity.
 -- The return value is often ignored.
 {-# INLINE newEntity #-}
-newEntity :: (Store (Storage c), Has w c, Has w EntityCounter)
-          => c -> System w Entity
+newEntity :: (Store IO (Storage c), Has w IO c, Has w IO EntityCounter)
+          => c -> SystemT w IO Entity
 newEntity c = do ety <- nextEntity
                  set ety c
                  return ety
 
 -- | Explicitly invoke the garbage collector
-runGC :: System w ()
+runGC :: MonadIO m => SystemT w m ()
 runGC = liftIO performMajorGC
 
 -- $hash
@@ -119,7 +120,7 @@ flatten' :: (Applicative v, Integral a, Foldable v)
 flatten' size vec = foldr (\(n,x) acc -> n*acc + x) 0 (liftA2 (,) size vec)
 
 -- | Runs a system and gives its execution time in seconds
-timeSystem :: System w a -> System w (Double, a)
+timeSystem :: MonadIO m => SystemT w m a -> SystemT w m (Double, a)
 timeSystem sys = do
   s <- liftIO getCPUTime
   a <- sys
@@ -127,5 +128,5 @@ timeSystem sys = do
   return (fromIntegral (t-s)/1e12, a)
 
 -- | Runs a system, discards its output, and gives its execution time in seconds
-timeSystem_ :: System w a -> System w Double
+timeSystem_ :: MonadIO m => SystemT w m a -> SystemT w m Double
 timeSystem_ = fmap fst . timeSystem
