@@ -16,7 +16,7 @@ import qualified Data.Vector.Unboxed   as U
 -- import qualified Apecs.THTuples        as T
 
 -- | An Entity is really just an Int in a newtype, used to index into a component store.
-newtype Entity = Entity {unEntity :: Int} deriving (Eq, Ord, Show)
+newtype Entity = Entity {unEntity :: Int} deriving (Num, Eq, Ord, Show)
 
 -- | A system is a newtype around `ReaderT w IO a`, where `w` is the game world variable.
 newtype SystemT w m a = System {unSystem :: ReaderT w m a} deriving (Functor, Monad, Applicative, MonadIO, MonadTrans)
@@ -56,9 +56,7 @@ class Monad m => Store m s where
 
   -- | Returns whether there is a component for the given index
   explExists :: s -> Int -> m Bool
-  explExists s n = do
-    mems <- explMembers s
-    return $ U.elem n mems
+  explExists s n = U.elem n <$> explMembers s
 
 instance Component c => Component (Identity c) where
   type Storage (Identity c) = Identity (Storage c)
