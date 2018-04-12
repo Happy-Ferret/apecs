@@ -13,7 +13,7 @@ module Apecs (
   -- * Systems
     get, set, getAll,
     cmap, cmapM, cmapM_,
-    modify, destroy, exists,
+    members, modify, destroy, exists,
 
   -- * Other
     runSystem, runWith,

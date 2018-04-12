@@ -1,2 +1,475 @@
-* A tour of
+#+TITLE: A Type-Driven Entity-Component-System Framework Draft
+#+AUTHOR: Jonas Carpay
+#+OPTIONS: todo:nil
 
+bibliography:report.bib
+
+* Aantekeningen
+- Bewijzen dat ((a,b),c) = (a,(b,c)) = (a,b,c)?
+- duidelijker cmap aantonen in introductie
+- Tabellen met entities/components
+- Not en Maybe eerder geven
+- Het is niet zo simpel als het lijkt
+- Je bent een verhaal aan het vertellen
+  - Logisch colgorde secties
+    - Cool things gaat van de hak op de tak
+    - Wat gebeurt er als ik een tuple schrijf
+- Wat voor soort queries zou je schrijven
+- Functie matcht alleen op Just
+- Haskell code is ook lastig
+- Store associeert een k met een v
+- Wat is een component -> regels
+- A store over a component C is a finite partial function Ety -> C
+- Globals achterwege laten for future work, net als onwetmatige lenzen
+- De componenten die je gebruikt plaatsen constraints op de monad die je kan gebruiken
+- apecs in titel
+- makeWorld expansion is niet zo leesbaar dat ie moet blijven staan
+- Uitleg kan bij Has
+- Related work onderbreekt demo
+- Approch en problem statement samen 1 sectie
+- Ad hoc en boilerplate
+- Via haskell bereiken we de drie goals
+- bewijs dat cmap krachtig is
+- Illustreer dat als je het niet met types doet krijg je een hoop boilerplate
+- Its goals are??
+- Volgorde cmap onbepaald (belangrijk voor cmapM)
+- Focus op fancy cmap tricks, laat zien wat voor soort dingen je kan uitdrukken
+- ECS scheidt data en code
+- Misschien in Rust schrijven
+- Generic mutable vector -> map
+- Contributie
+
+* Abstract
+- Type-driven approach
+- simple -> performant
+- Introduce DSL
+- Describe Implementation
+- Prove implementation
+* Introduction [3/3]
+** DONE Problem Statement
+Games are often a bad fit for classical Object Oriented-style inheritance trees, and most major game engines (Unity, Unreal Engine) favor composition over inheritance using e.g. the /Component Pattern/ cite:Nystrom.
+Rather than having a game object inherit behaviour, the user instead assembles the game object from smaller generic objects, called components.
+The /Entity-Component-System/ (ECS) pattern is an extension of the Component pattern that adds a rule: components only contain data, no code.
+The idea is not new; arguably the first example was presented by Bilas at the 2002 Game Developer's Conference cite:Bilas, and since then many different ECS interpretations have been proposed.
+Most major libraries work as follows:
+
+/Components/ are structs, pieces of pure data.
+The canonical examples are position and velocity.
+An /Entity/ represents a single game object, and conceptually it consists of multiple components.
+Internally, however, it is just an integer value.
+Components of a single type are stored together in a key-value store, the key being the entity they belong to.
+An entity is therefore mostly implicit; an entity can be said to exist as long as there is a single component associated with it.
+The game state is entirely captured in the state of the individual component stores.
+Furthermore, we can freely add and remove components to and from entities during runtime.
+
+/Systems/ perform an operation on the entire game world.
+The typical example is adding an entity's velocity to its position, for all entities that have both of those components.
+Systems allow Game logic to be expressed in concise, general statements about the game's behaviour.
+Because they operate on stores directly, they can be extremely fast.
+
+This combination of expressivity and performance is what makes ECS so promising for game development.
+There are many open source ECS libraries available, and there is a large body of informal research in the form of blog posts and talks.
+Despite all this, ECS has not really hit the mainstream yet.
+There is no simple reason for this, but we believe one aspect is that no current implementation manages to deliver on either the performance or expressivity of a domain-specific language.
+
+In this paper we will present /apecs/, a simple yet powerful Entity-Component-System language embedded in Haskell.
+The design of apecs is similar to that of popular imperative ECS libraries, but by embedding it in Haskell, we can use strong typing to eliminate a lot of the boilerplate of other implementations.
+It should be noted, however, that the DSL itself is still stateful and imperative.
+The goal is not to explore how to idiomatically write games in functional languages, but rather how to leverage strong typing for fast and expressive ECS programming.
+
+** DONE Approach
+In this section, we will give a short overview of how and why you interact with apecs and its central ~cmap~ function.
+
+We start with the observation that the system "add every entity's velocity to its position" can be defined in terms of a single function:
+#+BEGIN_SRC haskell
+stepFun :: (Position, Velocity) -> Position
+stepFun (Position p, Velocity v) -> Position (v+p)
+#+END_SRC
+In fact, it turns out that this is true for most systems.
+We base our DSL on this principle, for two reasons:
+- In terms of expressivity, systems are defined in the simplest possible terms; the function that they execute.
+- The function input's type determines what entities to iterate over and what components to read, and the output type determines what components to write.
+  That means we have all information we should need to compile this system to a tight loop.
+
+In apecs, we turn a function into a system with ~cmap~:
+#+BEGIN_SRC haskell
+stepSys :: System World ()
+stepSys = cmap stepFun
+-- generally written inline as
+cmap $ \(Position p, Velocity v) -> Position (v+p)
+#+END_SRC
+
+Both the input and output of the mapped function need to be components.
+As you can see above, however, a tuple of two components is also considered a component.
+It represents the product, or intersection of two or more components.
+We can, of course, also use tuples in the output:
+#+BEGIN_SRC haskell
+-- Reset the player position
+cmap $ \Player -> (Position 0, Velocity 0)
+#+END_SRC
+In the above example ~Player~ is a unit type.
+This is a common pattern, where we tag entities simply by adding a unit component to them.
+
+Tuples were initially the only way to compose components, and there were many different versions of ~cmap~ for when you e.g. wanted to also be able to delete a component
+It turns out that behavior like this can also be encoded as a component, unifying all maps into a single general function.
+The main two examples are ~Maybe c~ for optionality, and ~Not c~ for negation.
+We will study them further in the next section, but using them looks like this:
+#+BEGIN_SRC haskell
+-- Apply gravity to non-flying entities
+cmap $ \(Velocity v, _ :: Not Flying) -> Velocity (v - dT * gravity)
+
+-- Apply poison damage for a period of time, and delete the poison component after time runs out
+cmap $ \(Poison t, Health h) -> ( Health (h - dT * poisonDamage)
+                                , if t > dT then Just (Poison (t-dT)) else Nothing )
+#+END_SRC
+
+It might not surprise you to learn that in apecs, a system is a monad, and we can monadically (i.e. with side effects) iterate over components as well.
+This is done using ~cmapM~ and ~cmapM_~, for example:
+#+BEGIN_SRC haskell
+-- For every entity with a position, print its entity number
+cmapM_ $ \(Position _, Entity e) -> liftIO (print e)
+
+-- When a player gets sufficiently close to a piece of fruit,
+-- remove the fruit and increase the score
+cmapM_ $ \(Player, Position posP) ->
+  cmapM_ $ \(Fruit, Position posF, etyF) ->
+    when (distance posP posF < 1) $ do
+      destroy etyF (undefined :: (Fruit, Position))
+      liftIO (putStrLn "100 points!")
+      cmap $ \(Score s) -> Score (x + 100)
+#+END_SRC
+
+Another benefit we have gained is that we can use type synonyms to assign names to combinations of components, rather than just individual ones.
+This makes it easy to, for example, make reusable sets of common properties:
+#+BEGIN_SRC haskell
+type Material = (Density, Friction, Elasticity)
+type Solid = (Shape, Material)
+
+rubber, wood :: Material
+rubber = (Density 0.4, Friction 0.9, Elasticity 0.8)
+metal  = (Density 0.8, Friction 0.7, Elasticity 0.1)
+
+ball, box :: Solid
+ball = (ballShape, rubber)
+box  = (boxShape,  wood)
+#+END_SRC
+
+These examples should give you a general idea of programming with apecs.
+~cmap~ is ubiquitous; if a system can be expressed with it, it often should.
+All the type-driven machinery might make it seem "magical", but as we will see in the next section, its definition is simple.
+The power mostly comes from the fact that we can be liberal with what exactly constitutes a component.
+Components can live in any data structure, foreign data structures, on the other side of a network connection, or just provide multiple ways of interacting with the same data (~apecs-physics~ provides both ~Mass~ and ~Density~ components, for example).
+
+** DONE Semantics
+Apecs is built around 5 primitive operations on components.
+They correspond to the methods we can call on component stores, which can be found in [[Implementation]].
+We will explore these operations with the use of a simple running example.
+In the example, we define three components; Position, Velocity, and Player.
+
+#+BEGIN_SRC haskell
+newtype Position = Position Double
+newtype Velocity = Velocity Double
+data Player = Player
+
+makeWorldAndComponents "MyWorld" [''Position, ''Velocity, ''Player] -- Generate world and default Component instances
+
+game = return ()
+
+main = initMyWorld >>= runSystem game
+#+END_SRC
+
+We can visualize the game state as a table, initially empty:
+| Entity | Position | Velocity | Player |
+|--------+----------+----------+--------|
+|      0 | -        | -        | -      |
+|      1 | -        | -        | -      |
+|      2 | -        | -        | -      |
+|    ... |          |          |        |
+Note that every entity always "exists", none just have any components yet.
+
+~set :: Has w c => Entity -> c -> System w ()~ writes a component.
+Calling set on a tuple is equivalent to setting the individual elements in order;
+~set ety (Position 1, Position 2)~ will generally be equivalent to ~set ety (Position 2)~.
+While setting ~Just c~ is the same as setting ~c~ directly, setting a component to ~Not :: Not c~ or ~Nothing :: Maybe c~ will actually call ~destroy~ on that component.
+For example, ~set 0 (Position 1) >> set 1 (Velocity 2, Just Player)~ will result in the following game state:
+| Entity | Position     | Velocity     | Player   |
+|--------+--------------+--------------+----------|
+|      0 | ~Position 1~ | -            | -        |
+|      1 | -            | ~Velocity 2~ | ~Player~ |
+|      2 | -            | -            | -        |
+|    ... |              |              |          |
+
+~destroy :: Has w c => Entity -> c -> System w ()~ deletes a component.
+The argument ~c~ is not evaluated, it provides a type argument.
+Tuples again just correspond to destroying the individual components, destroying ~Maybe c~ will destroy ~c~, and destroying a ~Not~ does nothing.
+After calling ~destroy 1 (undefined :: Velocity)~ we have:
+| Entity | Position     | Velocity | Player   |
+|--------+--------------+----------+----------|
+|      0 | ~Position 1~ | -        | -        |
+|      1 | -            | -        | ~Player~ |
+|      2 | -            | -        | -        |
+|    ... |              |          |          |
+Alternatively, we could have called ~cmap $ \Player -> Not :: Not Velocity~.
+This is generally the preferred approach, as it avoids the need to every manually track ~Entity~ values.
+
+~get :: Has w c => Entity -> System w c~ is straightforward, it reads the table in column ~c~ at row ~Entity~.
+In ~Position p <- get 0~, ~p = 1~.
+Note that nothing prevents you from calling ~Velocity v <- get 0~, which would result in an error.
+Luckily, this is not a problem.
+In cases where we are not guaranteed that ~get~ is safe, we simlpy read the component as a ~Maybe~ instead, like ~mVel :: Maybe Velocity <- get 1~, which first uses ~exists~ to check whether the component exists.
+Getting a tuple reads both components, and reading a ~Not~ always returns ~Not~.
+
+~exists :: Has w c => Entity -> c -> System w Bool~ checks whether the component ~c~ is present in the table for the given entity.
+The ~c~ argument is another phantom argument, it is never evaluated.
+When ~exists~ returns ~True~, ~get~ is guaranteed to be safe.
+A tuple ~exists~ when its inidividual components do, and a ~Maybe~ always does.
+Not is more interesting, as ~exists ety (undefined :: Not c)~ will give the inverse result of ~exists ety (undefined :: c)~.
+
+Finally, ~members :: Has w c => c -> System w [Entity]~ will produce a list of all entities that have the component given by the component phantom argument.
+When asking for the members of a tuple, we will get a list of all entities that have both components.
+Specifically, a tuple ~(a,b)~ asks for a list of members of ~a~, and then uses ~exists~ to filter those who also have its second component; it is completely defined by existing functions.
+This does have one interesting consequence in terms of performance.
+Suppose there are 1000 entities with a ~Position~, but only one with a ~Player~.
+Asking for the list of members of ~(Position, Player)~ will iterate over a list of a 1000 entities to find the one that also has a component.
+Asking for the list of members of ~(Player, Position)~ instead will only iterate over the one player component.
+The lists will are guaranteed to contain the same members, but the performace of the second way is 1000 times better.
+It is therefore good practice to try to keep the rarest component in the first position of a tuple.
+
+Asking for the members of a ~Not~ or ~Maybe~ gives another interesting question.
+Should we be able to request a list of entities that do not have a certain component?
+Ideally, we want the ~members~ list to, for every component, have two properties: for every entity in the list, ~exists~ should return true, and for every entity for which ~exists~ returns true, it should be on the list.
+Conceptually, we might argue that ~members (undefined :: Not Velocity)~ should return a list of all integers, given that no entities have a ~Velocity~ component, as for every on the list ~exists (undefined :: Velocity)~ would be true.
+This would also ensure that ~(a,b)~ has the same members as ~(b,a)~.
+The list would, however, need to contain every possible 64-bit integer, rendering it impractically long.
+A second approach would be to return a list of entities that have at least one other component, ~[Entity 0, Entity 1]~ in our example.
+The problem with that is that it would require allowing components to know about and inspect the stores of other components, which is currently not possible.
+Instead, the list of members will always be empty.
+This violates the second of our ideal properties, but it still guarantees that we never give unsafe values.
+This behavior might be changed if it turns out that it is worth the additional complexity, but in practice there are few situations in which you need a list of /all/ entities.
+
+All other operations in apecs are written in terms of these 5 primitives.
+For example, ~cmap~ can be written like this:
+#+BEGIN_SRC haskell
+cmap :: forall w cx cy. (Has w cx, Has w cy)
+     => (cx -> cy) -> System w ()
+cmap f = members (undefined :: cx)
+         >>= mapM_ (\ety -> get ety >>= set ety . f)
+#+END_SRC
+It retrieves a list of entities that have the ~cx~ component, and for each, it reads that component, applies the function to it, and writes the resulting ~cy~.
+The individual components' implementation of those functions take care of the rest.
+
+Finally, every world you generate with ~makeWorld~ or ~makeWorldAndComponents~ also contains one extra component, the ~EntityCounter~.
+It facilitates a convenience function called ~newEntity :: (Has w EntityCounter, Has w c) => c -> System w Entity~ that automatically writes components to consecutive entities.
+The initialization code would generally have been written as
+#+BEGIN_SRC haskell
+newEntity (Position 1)
+newEntity (Velocity 2, Player)
+#+END_SRC
+Unlike the components we've seen until now, this is a global component.
+You can get and set globals like any other component, but it contains the same component for every entity.
+We'll take a look at global components in [[Implementation]], but we with the exception of ~newEntity~, they can be safely ignored.
+
+** Compare with existing approaches
+There are a number of popular open-source ECS libraries available, for a variety of languages and frameworks.
+Two popular examples are /Entitas/, and /specs/.
+
+Entitas is probably the most popular and fully-featured ECS implementation currently available.
+There is both a free open-source version and a paid upgrade that features e.g. an improved code generator.
+It is a plug-in for the popular commercial game engine /Unity/.
+Despite it being embedded and using a code generator, it does not have a DSL, but is programmed in C#.
+
+/specs/ was written in Rust, and powers the /amethyst/ game engine.
+Apecs started as an attempt to port specs to Haskell.
+The reason main reason was that it still contains a lot of boilerplate code that could be derived from strong type signatures.
+
+There are also a few attempts at ECS in Haskell.
+Most recently /Ecstasy/, which was directly inspired by earlier efforts on apecs.
+Where ~apecs~ mimics the imperative ECS libraries that inspired it, in both design and performance, Ecstasy focuses on being idiomatic Haskell with immutable data structures.
+Ecstasy is still in its infancy, but might prove an interesting alternate approach.
+
+* Implementation
+The core of apecs is very small.
+The central type class in apecs is the ~Store~ class:
+#+BEGIN_SRC haskell
+class Store s where
+  type Elem s
+  initStore   :: IO s
+  explSet     :: s -> Int -> Elem s -> IO ()
+  explGet     :: s -> Int -> IO (Elem s)
+  explDestroy :: s -> Int -> IO ()
+  explMembers :: s -> IO (U.Vector Int)
+  explExists  :: s -> Int -> IO Bool
+#+END_SRC
+It represents a mutable data structure in the ~IO~ monad.
+The ~Store~ class defines the same primitive operations we discussed earlier, but they operate directly on the store, in the ~IO~ monad.
+The ~expl~ prefix indicates that we need to explicitly provide a store, the ~s~ argument, to use these functions.
+It is the goal of the ~System~ monad is to implicitly provide this argument.
+
+This is done through the ~Has~ type class:
+#+BEGIN_SRC haskell
+class Component c => Has w c where
+  getStore :: System w (Storage c)
+#+END_SRC
+
+~Entity~ is, as we have seen before, just an ~Int~.
+Because they are /just/ integers, they can also safely be stored and used as references to other entities.
+
+~Component~ is the type class that turns a data type into a component.
+When using ~makeWorldAndComponents~, every component ~c~ gets this default instance:
+#+BEGIN_SRC haskell
+instance Component c where
+  type Storage c = Map c
+#+END_SRC
+When you use ~makeWorld~, however, you have to define the instance yourself.
+We'll take a look at stores other than ~Map~ in [[Stores]].
+The ~Elem (Storage c) ~ c~ restricts your choice of store such that elements of the store are actually the component ~c~.
+This prevents you from writing e.g. ~instance Component Position where type Storage Position = Map Velocity~.
+
+~SystemT~ is a Reader monad transformer around some monad ~m~.
+The monad argument is where the underlying stores live, and the ~w~ is a collection of references to those stores as we saw in the example.
+
+The main mechanism of reading a store from the ~w~ is the ~Has~ type class, which allows the user to query the store of some component.
+
+And finally, the Store type class.
+The Store type class houses most of the actual operations done by apecs, but you generally don't use any of these functions directly.
+The implementations of these functions will generally correspond to expected behaviour for maps, but there are no laws requiring the user to do so.
+Keeping the ~m~ generic allows us to define instances for monads other than IO, most notably ST and STM.
+
+** Systems
+
+This pattern of producing a Store, and then lifting an action into its monad is so common that it has been captured in ~withStore~:
+#+BEGIN_SRC haskell
+withStore :: forall w m c a. Has w m c => (Storage c -> m a) -> SystemT w m a
+withStore f = do
+  s :: Storage c <- getStore
+  lift$ f s
+#+END_SRC
+
+** Stores
+The Store instance for Map looks like this:
+#+BEGIN_SRC haskell
+#+END_SRC
+It is the most basic store and will generally behave "as expected".
+There are, however, a number of other interesting stores that are less straightforward.
+One such example is ~Global~, used by e.g. ~EntityCounter~, whose signature looks like this:
+#+BEGIN_SRC haskell
+type instance Elem (Global c) = c
+instance (PrimMnad m, Monoid c) => Store m (Global c)
+#+END_SRC
+It is initialized with the monoidal ~mempty~ value, and will always ignore its entity arguments.
+There is an entity ~global = Entity (-1)~ used to signal writing to a global value, and by returning this entity when asking for a membership list, we retain sensible ~cmap~ behaviour.
+There are a few more maps not documented here, but these can be found in the apecs documentation.
+
+** TODO Laws and safety
+Store laws:
+1. Every entity in the list of members exists
+2. For every entity that exists, get is safe
+  
+Looking at the type signature for ~get~/~explGet~, we can see that it is possible to generate unsafe behaviour by looking up keys in the map for which there are no entries.
+Luckily this is easily dealt with, by casting to ~get :: Entity -> SystemT w m (Maybe c)~.
+This is the only unsafe behaviour in apecs, and it exists so users can skip the safety check if they are absolutely sure the lookup is safe, such as in an iteration over the members.
+
+** Instances
+It's worth taking a closer look at some of the instances for the core classes.
+*** Tuple
+There are a number of instances worth taking a look at.
+We've already briefly discussed the tuple instance:
+#+BEGIN_SRC haskell
+instance (Component a, Component b) => Component (a,b) where
+  type Storage (a,b) = (Storage a, Storage b)
+
+type instance Elem (a,b) = (Elem a, Elem b)
+
+instance (Has w m a, Has w m b) => Has w m (a,b) where
+  getStore = (,) <$> getStore <*> getStore
+instance (Store m a, Store m b) => Store m (a,b) where
+  initStore = (,) <$> initStore <*> initStore
+  explGet (sa,sb) ety = (,) <$> explGet sa ety <*> explGet sb ety
+  explSet (sa,sb) ety (xa,xb) = explSet sa ety xa >> explSet sb ety xb
+  explExists (sa,sb) ety = (&&) <$> explExists sa ety <*> explExists sb ety
+  explMembers (sa,sb) = explMembers sa >>= U.filterM (explExists sb)
+  explDestroy (sa,sb) ety = explDestroy sa ety >> explDestroy sb ety
+#+END_SRC
+Note how when producing a list of members, we first produce a list of members of the first component and then filter using the membership test for the second.
+An important consequence of this is that it is generally faster to iterate over the fewest members possible.
+For example, if 100 entities have a position but 1000 have a velocity, iterating over ~(Velocity, Position)~ should be about 10 times faster than the other way around.
+*** Negation
+~Not~ has a special store it uses, the ~NotStore~.
+The user will never instantiate this store manually, but instead the underlying store is wrapped in it when using ~getStore~.
+#+BEGIN_SRC haskell
+data Not a = Not
+newtype NotStore s = NotStore s
+
+instance Component c => Component (Not c) where
+  type Storage (Not c) = NotStore (Storage c)
+
+instance (Has w m c) => Has w m (Not c) where
+  getStore = NotStore <$> getStore
+
+type instance Elem (NotStore s) = Not (Elem s)
+instance Store m s => Store m (NotStore s) where
+  initStore = NotStore <$> getStore
+  explGet _ _ = return Not
+  explSet (NotStore sa) ety _ = explDestroy sa ety
+  explExists (NotStore sa) ety = not <$> explExists sa ety
+  explMembers _ = return mempty
+  explDestroy sa ety = explSet sa ety Not
+#+END_SRC
+~NotStore~'s primary task is to invert the membership test, but the rest of the functions still have sensible implementations.
+Now, why is the list of members empty?
+There are a number of reasons.
+- The laws require only that all entities in the list exist, which is always true for an empty list.
+- One possible, correct implementation would return a list of all integers for which it does not hold an entity, but this would obviously be impractically long.
+- Another possibility would be a list of all live entities in other stores, but the NotStore does not know about any stores other than the one it is currently wrapping.
+- A more general point is that we can never indiscriminately iterate over all entities, as there could easily be millions.
+- ~Not~ will generally only occur as part of a tuple to filter out components, and will rarely be asked for its members.
+  
+~Not~ is especially useful when we use unit constructors, like
+#+BEGIN_SRC haskell
+data Flying = Flying
+instance Component Flying where type Storage Flying = Map Flying
+#+END_SRC
+Single-constructor components can be used to tag entities, with their presence or absence acting like boolean values.
+This allows us to e.g. apply gravity to non-flying entities like this:
+#+BEGIN_SRC haskell
+cmap $ \(Velocity (V2 x y), Not :: Not Flying) -> Velocity (V2 x (y-1))
+#+END_SRC
+*** Entity
+Finally, ~Entity~ can also be used as a component:
+#+BEGIN_SRC haskell
+data EntityStore = EntityStore
+instance Component Entity where
+  type Storage Entity = EntityStore
+
+instance Monad m => (Has w m Entity) where
+  getStore = return EntityStore
+
+type instance Elem EntityStore = Entity
+instance Monad m => Store m EntityStore where
+  initStore = error "Initializing Pseudostore"
+  explGet _ ety = return $ Entity ety
+  explSet _ _ _ = return ()
+  explExists _ _ = return True
+  explMembers _ = return mempty
+  explDestroy _ _ = return ()
+#+END_SRC
+This allows expressions like ~cmapM_ $ \(Position p, Entity e) -> liftIO$ print (p,e)~ to print a list of all positions and corresponding entities.
+** Note
+The above describes the code as it occurs on apecs' ~systemt~ branch.
+The difference between it and the main branch is that ~SystemT~ has a monad argument, whereas on the main branch, you will find
+#+BEGIN_SRC haskell
+newtype System w a = System {unSystem :: ReaderT w IO a}
+#+END_SRC
+The ~SystemT~ version allows for many cool things (like using the STM monad) and is probably the more idiomatic implementation of the two.
+Unfortunately, benchmarks show that this branch is currently over 10 times slower than the master branch.
+Because one of apecs main strengths is the fact that its performance is competitive with Rust ECS implementations, the ~system~ branch will not be merged until this is addressed.
+
+* Verification
+Wat te verifieren?
+* Related Work
+Dit is grotendeels al aangepakt in de introductie?
+* Conclusion
+** Verification
+** Future work
+- SystemT branch
+- Remove Template Haskell? Move to generics?

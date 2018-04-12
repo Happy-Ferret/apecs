@@ -29,3 +29,9 @@ executable shmup
     random
   default-language:
     Haskell2010
+
+executable tour
+  main-is: Tour.hs
+  build-depends: base >= 4.7 && < 5, apecs >= 0.3
+  default-language: Haskell2010
+

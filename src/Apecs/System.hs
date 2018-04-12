@@ -27,9 +27,7 @@ get (Entity ety) = do
   s :: Storage c <- getStore
   liftIO$ explGet s ety
 
--- | Writes a component to a given entity. Will overwrite existing components.
---   The type was originally 'Entity c -> c -> System w ()', but is relaxed to 'Entity e'
---   so you don't always have to write 'set . cast'
+-- | Writes a component to a given entity.
 {-# INLINE set #-}
 set :: forall w c. Has w c => Entity -> c -> System w ()
 set (Entity ety) x = do
@@ -43,6 +41,21 @@ exists :: forall w c. Has w c => Entity -> c -> System w Bool
 exists (Entity ety) ~_ = do
   s :: Storage c <- getStore
   liftIO$ explExists s ety
+
+-- | Produces a list of all entities that have some component @c@.
+members :: forall w c. Has w c
+         => c -> System w [Entity]
+members _ = do
+  s :: Storage c <- getStore
+  liftIO$ (fmap Entity . U.toList) <$> explMembers s
+
+-- | Destroys component @c@ for the given entity.
+-- Note that @c@ is a phantom argument, used only to convey the type of the entity to be destroyed.
+{-# INLINE destroy #-}
+destroy :: forall w c. Has w c => Entity -> c -> System w ()
+destroy (Entity ety) ~_ = do
+  s :: Storage c <- getStore
+  liftIO$ explDestroy s ety
 
 -- | Maps a function over all entities with a @cx@, and writes their @cy@
 {-# INLINE cmap #-}
@@ -88,15 +101,6 @@ getAll = do
   s :: Storage c <- getStore
   sl <- liftIO$ explMembers s
   forM (U.toList sl) $ liftIO . explGet s
-
-
--- | Destroys component @c@ for the given entity.
--- Note that @c@ is a phantom argument, used only to convey the type of the entity to be destroyed.
-{-# INLINE destroy #-}
-destroy :: forall w c. Has w c => Entity -> c -> System w ()
-destroy (Entity ety) ~_ = do
-  s :: Storage c <- getStore
-  liftIO$ explDestroy s ety
 
 -- | Applies a function, if possible.
 {-# INLINE modify #-}

@@ -70,18 +70,22 @@ step dT = do
     incrTime = cmap $ \(Time t) -> Time (t+dT)
     stepPosition = cmap $ \(Position p, Velocity v) -> Position (p + dT *^ v)
     clampPlayer = cmap $ \(Player, Position (V2 x y)) -> Position (V2 (min xmax . max xmin $ x) y)
+
     triggerEvery period phase sys = do
       Time t <- get global
       let t' = t + phase
       when (floor (t'/period) /= floor ((t'+dT)/period)) (void sys)
+
     clearBullets = cmapM_ $ \(Bullet, Position (V2 x y), ety) ->
       when (y > 170) $ do
         destroy ety (proxy :: (Bullet, Movable))
         cmap $ \(Score x) -> Score (x-40)
+
     clearTargets = cmap $ \c@(Target, Position (V2 x y), Velocity v) ->
       if x < xmin || x > xmax
          then Nothing
          else Just c
+
     handleCollisions =
       cmapM_ $ \t@(Target, Position pTarget, Velocity _, eTarget) ->
         cmapM_ $ \b@(Bullet, Position pBullet, Velocity _, eBullet) ->
@@ -90,6 +94,7 @@ step dT = do
             destroy eBullet b
             spawnParticles 15 pBullet white (-500,500) (200,-50)
             cmap $ \(Score x) -> Score (x + 100)
+
     stepParticles = cmapM_ $ \(Particle col t, ety) ->
       if t < 0
          then destroy ety (proxy :: (Particle, Movable))
@@ -104,6 +109,7 @@ draw = do
   pt <- toPic $ \(Particle col _, Position p, Velocity (V2 vx vy)) -> color col . translate' p $ Line [(0,0),(realToFrac vx/10, realToFrac vy/10)]
   return $ mconcat [p,t,b,s,pt]
   where
+    toPic :: (Has World c) => (c -> Picture) -> System' Picture
     toPic f = mconcat . fmap f <$> getAll
     translate' (V2 x y) = translate (realToFrac x) (realToFrac y)
     triangle = Line [(0,0),(-0.5,-1),(0.5,-1),(0,0)]

@@ -31,6 +31,7 @@ class (Elem (Storage c) ~ c, Store (Storage c)) => Component c where
 class Component c => Has w c where
   getStore :: System w (Storage c)
 
+type family Elem s
 -- | Holds components indexed by entities
 --
 --   Laws:
@@ -39,9 +40,6 @@ class Component c => Has w c where
 --
 --      * If for some entity @explExists s ety@, @explGet s ety@ should safely return a non-bottom value.
 class Store s where
-  -- | The type of components stored by this Store
-  type Elem s
-
   -- | Initialize the store with its initialization arguments.
   initStore :: IO s
 
@@ -64,8 +62,8 @@ instance Component c => Component (Identity c) where
 instance Has w c => Has w (Identity c) where
   getStore = Identity <$> getStore
 
+type instance Elem (Identity s) = Identity (Elem s)
 instance Store s => Store (Identity s) where
-  type Elem (Identity s) = Identity (Elem s)
   initStore = error "Initializing Pseudostore"
   explGet (Identity s) e = Identity <$> explGet s e
   explSet (Identity s) e (Identity x) = explSet s e x
@@ -88,8 +86,8 @@ instance Component c => Component (Not c) where
 instance (Has w c) => Has w (Not c) where
   getStore = NotStore <$> getStore
 
+type instance Elem (NotStore s) = Not (Elem s)
 instance Store s => Store (NotStore s) where
-  type Elem (NotStore s) = Not (Elem s)
   initStore = error "Initializing Pseudostore"
   explGet _ _ = return Not
   explSet (NotStore sa) ety _ = explDestroy sa ety
@@ -105,8 +103,8 @@ instance Component c => Component (Maybe c) where
 instance (Has w c) => Has w (Maybe c) where
   getStore = MaybeStore <$> getStore
 
+type instance Elem (MaybeStore s) = Maybe (Elem s)
 instance Store s => Store (MaybeStore s) where
-  type Elem (MaybeStore s) = Maybe (Elem s)
   initStore = error "Initializing Pseudostore"
   explGet (MaybeStore sa) ety = do
     e <- explExists sa ety
@@ -126,8 +124,8 @@ instance (Component p, Component q) => Component (Either p q) where
 instance (Has w p, Has w q) => Has w (Either p q) where
   getStore = EitherStore <$> getStore <*> getStore
 
+type instance Elem (EitherStore sp sq) = Either (Elem sp) (Elem sq)
 instance (Store sp, Store sq) => Store (EitherStore sp sq) where
-  type Elem (EitherStore sp sq) = Either (Elem sp) (Elem sq)
   initStore = error "Initializing Pseudostore"
   explGet (EitherStore sp sq) ety = do
     e <- explExists sp ety
@@ -151,8 +149,8 @@ instance Component c => Component (Filter c) where
 instance Has w c => Has w (Filter c) where
   getStore = FilterStore <$> getStore
 
+type instance Elem (FilterStore s) = Filter (Elem s)
 instance Store s => Store (FilterStore s) where
-  type Elem (FilterStore s) = Filter (Elem s)
   initStore = error "Initializing Pseudostore"
   explGet _ _ = return Filter
   explSet _ _ _ = return ()
@@ -168,8 +166,8 @@ instance Component Entity where
 instance (Has w Entity) where
   getStore = return EntityStore
 
+type instance Elem EntityStore = Entity
 instance Store EntityStore where
-  type Elem EntityStore = Entity
   initStore = error "Initializing Pseudostore"
   explGet _ ety = return $ Entity ety
   explSet _ _ _ = liftIO$ putStrLn "Warning: Writing Entity is undefined"
